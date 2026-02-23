@@ -1,4 +1,4 @@
-**Goal**
+## Goal
 
 The goal of this project is to take a worker node with NVIDIA GPUs in an OpenShift cluster and split the GPUs into some being available for container workloads and some being available in passthrough mode for virtual machines.
 
