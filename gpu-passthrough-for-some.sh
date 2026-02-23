@@ -43,32 +43,39 @@ mapfile -t my_gpus < <(lspci -n|grep -E $gpuid)
 printf "$header" "GPU Bus ID" "Kernel Driver" "PassThru Eligible" "GPU Available"
 printf "%$width.${width}s\n" "$divider"
 
-# Declare empty array to store nic details on those that can be unbound
+# Declare empty array to store passthrough details on those that can be unbound also set gpuavail counter to 0
 declare -a passthrough=()
 gpuavail=0
 
+# Enumerate through the GPUs discovered on host
 for (( gpu=0; gpu<${#my_gpus[@]}; gpu++ ))
 do
+   # Extract GPU bus id and kernel driver if one is in use
    gpubusid=`echo ${my_gpus[$gpu]} | awk '{print $1}'`
    gpudrv=`lspci -kn -s $gpubusid | grep "Kernel driver in use:"| awk -F ": " '{print $2}'`
 
-   # Check if driver is already vfio-pci enabled for given gpu if not flag it
+   # Check if driver is already vfio-pci enabled for given gpu if not flag it as available and add to passthrough array
    if [ "$gpudrv" = "vfio-pci" ]; then
       passthru="Complete"
+      gpustate="$gpuavail of $gpunum"
    else
       passthru="Yes"
-      #passthrough+=("$gpubusid")
+      # Only add to passthrough if our gpunum argument passed is still less the gpuavail count
+      if [[ $gpuavail -lt $gpunum ]]; then
+        passthrough+=("$gpubusid")
+      fi
       let gpuavail++
+      # Check if driver output was empty on systems where nouveau was blacklisted and no nvidia drivers were loaded 
       if [ "$gpudrv" = "" ]; then
          gpudrv="N/A"
       fi
    fi
 
+   # Set gpustate for output based on count.  If we have met the number required set as not required else provide counts 
    if [[ $gpuavail -gt $gpunum ]]; then
       gpustate="Not Required"
    else
       gpustate="$gpuavail of $gpunum"
-      passthrough+=("$gpubusid")
    fi
    # Display to console the details
    printf "$format" $gpubusid $gpudrv $passthru "$gpustate"
@@ -83,6 +90,7 @@ if ! grep -E "^vfio_pci " /proc/modules; then
   echo " "
 fi
 
+# Check if we have enough GPUs allocated to convert to vfio-pci 
 if [[ ${#passthrough[@]} -eq $gpunum ]]; then
   echo ""
   echo "$gpunum GPUs identified for converting to passthrough..."
@@ -91,7 +99,8 @@ if [[ ${#passthrough[@]} -eq $gpunum ]]; then
   # Loop through array of gpus that can be set to vfio-pci
   for (( pass=0; pass<${#passthrough[@]}; pass++ ))
   do
-     if [[ ${passthrough[pass]} -ne 12 ]]; then
+     # Fix up gpupath of bus id - the path is 12 and arm that shows but on x86 seems zero padding is needed
+     if [[ ${#passthrough[$pass]} -ne 12 ]]; then
        gpupath="0000:${passthrough[pass]}"
      fi
      echo " "
@@ -103,12 +112,9 @@ if [[ ${#passthrough[@]} -eq $gpunum ]]; then
      #echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
      echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
      #echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
+     echo ""
      echo "Device kernel driver validation..."
-     lspci -k -s ${passthrough[$pass]}
-     #echo "0000:61:00.0" > /sys/bus/pci/devices/0000\:61\:00.0/driver/unbind
-     #echo vfio-pci > /sys/bus/pci/devices/0000\:61\:00.0/driver_override
-     #echo "0000:61:00.0" > /sys/bus/pci/drivers/vfio-pci/bind
-     
+     lspci -k -s ${passthrough[$pass]}  
   done
 else
   echo "Only ${#passthrough[@]} out of the requested $gpunum of GPUs available for passthrough."
