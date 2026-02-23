@@ -31,16 +31,16 @@ fi
 # Set table header format 
 divider===============================================
 divider=$divider$divider$divider
-header="\n %-12s %-16s %-14s %-14s %-14s\n"
-format=" %-14s %-14s %-14s %-14s %-14s\n"
-width=100
+header="\n %-14s %-14s %-14s %-14s\n"
+format=" %-14s %-14s %-14s %-14s\n"
+width=80
 
 # Slurp in nic device type ids from lspci
 gpuid=`echo $gpuid |sed 's/,/\|/g'`
 mapfile -t my_gpus < <(lspci -n|grep -E $gpuid)
 
 # Print out headers 
-printf "$header" "GPU Bus ID" "Kernel Driver" "PassThru Eligible" "GPU Available"
+printf "$header" "GPU Bus ID" "Kernel Driver" "PassThru Avail" "GPU Avail"
 printf "%$width.${width}s\n" "$divider"
 
 # Declare empty array to store passthrough details on those that can be unbound also set gpuavail counter to 0
@@ -101,7 +101,9 @@ if [[ ${#passthrough[@]} -eq $gpunum ]]; then
   do
      # Fix up gpupath of bus id - the path is 12 and arm that shows but on x86 seems zero padding is needed
      if [[ ${#passthrough[$pass]} -ne 12 ]]; then
-       gpupath="0000:${passthrough[pass]}"
+       gpupath="0000:${passthrough[$pass]}"
+     else
+       gpupath="${passthrough[$pass]}"
      fi
      echo " "
      echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
