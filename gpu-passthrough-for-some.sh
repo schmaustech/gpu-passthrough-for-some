@@ -119,6 +119,7 @@ if [[ ${#passthrough[@]} -eq $gpunum ]]; then
      lspci -k -s ${passthrough[$pass]}  
   done
 else
+  echp ""
   echo "Only ${#passthrough[@]} out of the requested $gpunum of GPUs available for passthrough."
   exit 1 
 fi
