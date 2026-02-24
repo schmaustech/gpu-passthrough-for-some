@@ -7,7 +7,7 @@
 howto(){
   echo "Usage: gpu-passthrough-for-some.sh -g <gpu device id> -c <number of gpus>"
   echo "Example Single GPU Device ID: gpu-passthrough-for-some.sh -g 10de:26b9 -c 1"
-  echo "Example Multi GPU Device ID: gpu-passthrough-for-some.sh -g 10de:26b9|10de:2335 -c 4"
+  #echo "Example Multi GPU Device ID: gpu-passthrough-for-some.sh -g 10de:26b9|10de:2335 -c 4"
 }
 
 # Getopts setup for variables to pass from options
@@ -108,12 +108,12 @@ if [[ ${#passthrough[@]} -eq $gpunum ]]; then
      echo " "
      echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
      echo "Path: /sys/bus/pci/devices/$gpupath/driver/unbind"
-     #echo -n "${passthrough[$pass]}" > /sys/bus/pci/devices/$gpupath/driver/unbind
+     echo -n "${passthrough[$pass]}" > /sys/bus/pci/devices/$gpupath/driver/unbind
      echo "Applying driver override to GPU device ${passthrough[$pass]}..."
      echo "Path: /sys/bus/pci/devices/$gpupath/driver_override"
-     #echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
+     echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
      echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
-     #echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
+     echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
      echo ""
      echo "Device kernel driver validation..."
      lspci -k -s ${passthrough[$pass]}  
