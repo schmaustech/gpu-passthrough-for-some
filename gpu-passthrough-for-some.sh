@@ -102,7 +102,7 @@ do
   fi
 
   # This will kill off processes that are holding GPU device 
-  oc debug -q node/${my_workers[$worker]} -- chroot /host oc /bin/bash -c "kill -9 \$(lsof +c 0 /run/nvidia/driver/dev/nvidia*|grep -E \"nvidia-persis|nvidia-device|nv-hostengine\"| sort |awk {'print \$2'}| uniq)"
+  oc debug -q node/${my_workers[$worker]} -- chroot /host /bin/bash -c "kill -9 \$(lsof +c 0 /run/nvidia/driver/dev/nvidia*|grep -E \"nvidia-persis|nvidia-device|nv-hostengine\"| sort |awk {'print \$2'}| uniq)"
 
   # Check if we have enough GPUs allocated to convert to vfio-pci 
   if [[ ${#passthrough[@]} -eq $gpunum ]]; then
@@ -147,7 +147,7 @@ do
   # The nvidia processes we killed will all restart with the exception of nvidia-persistenced
   # We need to go into the daemonset pod and restart it
   container=`oc get pods -n nvidia-gpu-operator -o wide --field-selector spec.nodeName=nvd-srv-29.nvidia.eng.rdu2.dc.redhat.com -l app.kubernetes.io/component=nvidia-driver --no-headers| awk {'print $1'}`
-  oc rsh -n nvidia-gpu-operator $container ls /var/run/nvidia-persistenced/nvidia-persistenced.pid
+  oc rsh -n nvidia-gpu-operator $container rm -r -f /var/run/nvidia-persistenced/*
   oc rsh -n nvidia-gpu-operator $container nvidia-persistenced --persistence-mode
 done
 
