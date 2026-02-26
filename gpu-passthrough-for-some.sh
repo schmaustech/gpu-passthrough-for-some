@@ -28,99 +28,112 @@ if ([ -z "$gpuid" ] || [ -z "$gpunum" ]) then
    exit 1
 fi
 
+# Fix up gpuid input
+gpuid=`echo $gpuid |sed 's/,/\|/g'`
+
+
 # Set table header format 
 divider===============================================
 divider=$divider$divider$divider
-header="\n %-14s %-14s %-14s %-14s\n"
-format=" %-14s %-14s %-14s %-14s\n"
+header="\n %-14s %-14s %-14s %-14s %-14s\n"
+format=" %-14s %-14s %-14s %-14s %-14s\n"
 width=80
 
-# Slurp in nic device type ids from lspci
-gpuid=`echo $gpuid |sed 's/,/\|/g'`
-mapfile -t my_gpus < <(lspci -n|grep -E $gpuid)
+# Grab a list of OpenShift nodes that contain GPUs 
+mapfile -t my_workers < <(oc get nodes -l feature.node.kubernetes.io/pci-10de.present=true --no-headers=true | awk {'print $1'})
 
-# Print out headers 
-printf "$header" "GPU Bus ID" "Kernel Driver" "PassThru Avail" "GPU Avail"
-printf "%$width.${width}s\n" "$divider"
-
-# Declare empty array to store passthrough details on those that can be unbound also set gpuavail counter to 0
-declare -a passthrough=()
-gpuavail=0
-
-# Enumerate through the GPUs discovered on host
-for (( gpu=0; gpu<${#my_gpus[@]}; gpu++ ))
+for (( worker=0; worker<${#my_workers[@]}; worker++ ))
 do
-   # Extract GPU bus id and kernel driver if one is in use
-   gpubusid=`echo ${my_gpus[$gpu]} | awk '{print $1}'`
-   gpudrv=`lspci -kn -s $gpubusid | grep "Kernel driver in use:"| awk -F ": " '{print $2}'`
+  declare -a passthrough=()
+  gpuavail=0
 
-   # Check if driver is already vfio-pci enabled for given gpu if not flag it as available and add to passthrough array
-   if [ "$gpudrv" = "vfio-pci" ]; then
-      passthru="Complete"
-      gpustate="$gpuavail of $gpunum"
-   else
-      passthru="Yes"
-      # Only add to passthrough if our gpunum argument passed is still less the gpuavail count
-      if [[ $gpuavail -lt $gpunum ]]; then
-        passthrough+=("$gpubusid")
-      fi
-      let gpuavail++
-      # Check if driver output was empty on systems where nouveau was blacklisted and no nvidia drivers were loaded 
-      if [ "$gpudrv" = "" ]; then
-         gpudrv="N/A"
-      fi
-   fi
+  # Print out headers
+  printf "$header" "GPU Bus ID" "Kernel Driver" "PassThru Avail" "GPU Avail" "Node"
+  printf "%$width.${width}s\n" "$divider"
 
-   # Set gpustate for output based on count.  If we have met the number required set as not required else provide counts 
-   if [[ $gpuavail -gt $gpunum ]]; then
-      gpustate="Not Required"
-   else
-      gpustate="$gpuavail of $gpunum"
-   fi
-   # Display to console the details
-   printf "$format" $gpubusid $gpudrv $passthru "$gpustate"
+  # Slurp in gpu device type ids from worker with lspci
+  mapfile -t my_gpus < <(oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -nn|grep NVIDIA|awk {'print $1'})
+
+  # Enumerate through the GPUs discovered on host
+  for (( gpu=0; gpu<${#my_gpus[@]}; gpu++ ))
+  do
+     # Extract GPU bus id and kernel driver if one is in use
+     #gpubusid=`echo ${my_gpus[$gpu]} | awk '{print $1}'`
+     gpudrv=`oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -kn -s ${my_gpus[$gpu]} | grep "Kernel driver in use:"| awk -F ": " '{print $2}'`
+
+     # Check if driver is already vfio-pci enabled for given gpu if not flag it as available and add to passthrough array
+     if [ "$gpudrv" = "vfio-pci" ]; then
+        passthru="Complete"
+        gpustate="$gpuavail of $gpunum"
+     else
+        passthru="Yes"
+        # Only add to passthrough if our gpunum argument passed is still less the gpuavail count
+        if [[ $gpuavail -lt $gpunum ]]; then
+          passthrough+=("$gpubusid")
+        fi
+        let gpuavail++
+        # Check if driver output was empty on systems where nouveau was blacklisted and no nvidia drivers were loaded 
+        if [ "$gpudrv" = "" ]; then
+           gpudrv="N/A"
+        fi
+     fi
+
+     # Set gpustate for output based on count.  If we have met the number required set as not required else provide counts 
+     if [[ $gpuavail -gt $gpunum ]]; then
+        gpustate="Not Required"
+     else
+        gpustate="$gpuavail of $gpunum"
+     fi
+     # Display to console the details
+     printf "$format" ${my_gpus[$gpu]} $gpudrv $passthru "$gpustate" "${my_workers[$worker]}"
+  done
+
+  # Load vfio-pci is its not loaded
+  if ! oc debug -q node/${my_workers[$worker]} -- chroot /host grep -E "^vfio_pci " /proc/modules; then
+    echo " "
+    echo -n "Loading vfio-pci..."
+  #  modprobe vfio-pci
+    echo "...Done!"
+    echo " "
+  fi
+
+  # Check if we have enough GPUs allocated to convert to vfio-pci 
+  if [[ ${#passthrough[@]} -eq $gpunum ]]; then
+    echo ""
+    echo "$gpunum GPUs identified for converting to passthrough..."
+    echo ""
+
+    # Loop through array of gpus that can be set to vfio-pci
+    for (( pass=0; pass<${#passthrough[@]}; pass++ ))
+    do
+       # Fix up gpupath of bus id - the path is 12 and arm that shows but on x86 seems zero padding is needed
+       if [[ ${#passthrough[$pass]} -ne 12 ]]; then
+         gpupath="0000:${passthrough[$pass]}"
+       else
+         gpupath="${passthrough[$pass]}"
+       fi
+       echo " "
+       echo "Working on node ${my_workers[$worker]} GPUs..."
+       echo " "
+       echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
+       echo "Path: /sys/bus/pci/devices/$gpupath/driver/unbind"
+       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "${passthrough[$pass]} > /sys/bus/pci/devices/$gpupath/driver/unbind"
+       echo "Applying driver override to GPU device ${passthrough[$pass]}..."
+       echo "Path: /sys/bus/pci/devices/$gpupath/driver_override"
+       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
+       echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
+       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
+       echo " "
+       echo "Device kernel driver validation..."
+       #oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -k -s ${passthrough[$pass]}  
+       echo " "
+    done
+  else
+    echo " "
+    echo "Only ${#passthrough[@]} out of the requested $gpunum of GPUs available for passthrough."
+    exit 1 
+  fi
+
 done
 
-# Load vfio-pci is its not loaded
-if ! grep -E "^vfio_pci " /proc/modules; then
-  echo " "
-  echo -n "Loading vfio-pci..."
-  modprobe vfio-pci
-  echo "...Done!"
-  echo " "
-fi
-
-# Check if we have enough GPUs allocated to convert to vfio-pci 
-if [[ ${#passthrough[@]} -eq $gpunum ]]; then
-  echo ""
-  echo "$gpunum GPUs identified for converting to passthrough..."
-  echo ""
-
-  # Loop through array of gpus that can be set to vfio-pci
-  for (( pass=0; pass<${#passthrough[@]}; pass++ ))
-  do
-     # Fix up gpupath of bus id - the path is 12 and arm that shows but on x86 seems zero padding is needed
-     if [[ ${#passthrough[$pass]} -ne 12 ]]; then
-       gpupath="0000:${passthrough[$pass]}"
-     else
-       gpupath="${passthrough[$pass]}"
-     fi
-     echo " "
-     echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
-     echo "Path: /sys/bus/pci/devices/$gpupath/driver/unbind"
-     echo -n "${passthrough[$pass]}" > /sys/bus/pci/devices/$gpupath/driver/unbind
-     echo "Applying driver override to GPU device ${passthrough[$pass]}..."
-     echo "Path: /sys/bus/pci/devices/$gpupath/driver_override"
-     echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
-     echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
-     echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
-     echo ""
-     echo "Device kernel driver validation..."
-     lspci -k -s ${passthrough[$pass]}  
-  done
-else
-  echo " "
-  echo "Only ${#passthrough[@]} out of the requested $gpunum of GPUs available for passthrough."
-  exit 1 
-fi
 exit 0
