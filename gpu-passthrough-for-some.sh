@@ -101,7 +101,8 @@ do
     echo " "
   fi
 
-####   We need to go onto node and turn off nv-hostengine, nvidia-device-plugin, nvidia-persistenced 
+  # This will kill off processes that are holding GPU device 
+  oc debug -q node/${my_workers[$worker]} -- chroot /host oc /bin/bash -c "kill -9 \$(lsof +c 0 /run/nvidia/driver/dev/nvidia*|grep -E \"nvidia-persis|nvidia-device|nv-hostengine\"| sort |awk {'print \$2'}| uniq)"
 
   # Check if we have enough GPUs allocated to convert to vfio-pci 
   if [[ ${#passthrough[@]} -eq $gpunum ]]; then
@@ -123,12 +124,15 @@ do
        echo " "
        echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
        echo "Path: /sys/bus/pci/devices/$gpupath/driver/unbind"
-       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "${passthrough[$pass]} > /sys/bus/pci/devices/$gpupath/driver/unbind"
+       command="echo -n $gpupath > /sys/bus/pci/devices/$gpupath/driver/unbind"
+       oc debug -q node/${my_workers[$worker]} -- chroot /host /bin/bash -c "$command"
        echo "Applying driver override to GPU device ${passthrough[$pass]}..."
        echo "Path: /sys/bus/pci/devices/$gpupath/driver_override"
-       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override"
+       command="echo -n vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override"
+       oc debug -q node/${my_workers[$worker]} -- chroot /host /bin/bash -c "$command"
        echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
-       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "$gpupath > /sys/bus/pci/drivers/vfio-pci/bind"
+       command="echo -n $gpupath > /sys/bus/pci/drivers/vfio-pci/bind"
+       oc debug -q node/${my_workers[$worker]} -- chroot /host /bin/bash -c "$command"
        echo " "
        echo "Device kernel driver validation..."
        oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -k -s ${passthrough[$pass]}  
@@ -140,7 +144,11 @@ do
     exit 1 
   fi
 
-####   We need to go onto node and turn on nv-hostengine, nvidia-device-plugin, nvidia-persistenced
-
+  # The nvidia processes we killed will all restart with the exception of nvidia-persistenced
+  # We need to go into the daemonset pod and restart it
+  container=`oc get pods -n nvidia-gpu-operator -o wide --field-selector spec.nodeName=nvd-srv-29.nvidia.eng.rdu2.dc.redhat.com -l app.kubernetes.io/component=nvidia-driver --no-headers| awk {'print $1'}`
+  oc rsh -n nvidia-gpu-operator $container ls /var/run/nvidia-persistenced/nvidia-persistenced.pid
+  oc rsh -n nvidia-gpu-operator $container nvidia-persistenced --persistence-mode
 done
+
 exit 0
