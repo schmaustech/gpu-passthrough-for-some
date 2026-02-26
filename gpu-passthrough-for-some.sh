@@ -52,7 +52,7 @@ do
   printf "%$width.${width}s\n" "$divider"
 
   # Slurp in gpu device type ids from worker with lspci
-  mapfile -t my_gpus < <(oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -nn|grep NVIDIA|awk {'print $1'})
+  mapfile -t my_gpus < <(oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -nn|grep $gpuid|awk {'print $1'})
 
   # Enumerate through the GPUs discovered on host
   for (( gpu=0; gpu<${#my_gpus[@]}; gpu++ ))
@@ -69,7 +69,7 @@ do
         passthru="Yes"
         # Only add to passthrough if our gpunum argument passed is still less the gpuavail count
         if [[ $gpuavail -lt $gpunum ]]; then
-          passthrough+=("$gpubusid")
+          passthrough+=("${my_gpus[$gpu]}")
         fi
         let gpuavail++
         # Check if driver output was empty on systems where nouveau was blacklisted and no nvidia drivers were loaded 
@@ -89,13 +89,19 @@ do
   done
 
   # Load vfio-pci is its not loaded
-  if ! oc debug -q node/${my_workers[$worker]} -- chroot /host grep -E "^vfio_pci " /proc/modules; then
+  if ! oc debug -q node/${my_workers[$worker]} -- chroot /host grep -E "^vfio_pci " /proc/modules > /dev/null 2>&1; then
     echo " "
     echo -n "Loading vfio-pci..."
-  #  modprobe vfio-pci
+    oc debug -q node/${my_workers[$worker]} -- chroot /host modprobe vfio-pci
     echo "...Done!"
     echo " "
+  else 
+    echo " "
+    echo "Kernel module vfio-pci already loaded!"
+    echo " "
   fi
+
+####   We need to go onto node and turn off nv-hostengine, nvidia-device-plugin, nvidia-persistenced 
 
   # Check if we have enough GPUs allocated to convert to vfio-pci 
   if [[ ${#passthrough[@]} -eq $gpunum ]]; then
@@ -117,15 +123,15 @@ do
        echo " "
        echo "Unbinding device ${passthrough[$pass]} from kernel driver..."
        echo "Path: /sys/bus/pci/devices/$gpupath/driver/unbind"
-       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "${passthrough[$pass]} > /sys/bus/pci/devices/$gpupath/driver/unbind"
+       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "${passthrough[$pass]} > /sys/bus/pci/devices/$gpupath/driver/unbind"
        echo "Applying driver override to GPU device ${passthrough[$pass]}..."
        echo "Path: /sys/bus/pci/devices/$gpupath/driver_override"
-       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override
+       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "vfio-pci > /sys/bus/pci/devices/$gpupath/driver_override"
        echo "Binding GPU device ${passthrough[$pass]} to vfio-pci..."
-       #oc debug -q node/${my_workers[$worker]} -- chroot /host echo "$gpupath" > /sys/bus/pci/drivers/vfio-pci/bind
+       oc debug -q node/${my_workers[$worker]} -- chroot /host echo -n "$gpupath > /sys/bus/pci/drivers/vfio-pci/bind"
        echo " "
        echo "Device kernel driver validation..."
-       #oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -k -s ${passthrough[$pass]}  
+       oc debug -q node/${my_workers[$worker]} -- chroot /host lspci -k -s ${passthrough[$pass]}  
        echo " "
     done
   else
@@ -134,6 +140,7 @@ do
     exit 1 
   fi
 
-done
+####   We need to go onto node and turn on nv-hostengine, nvidia-device-plugin, nvidia-persistenced
 
+done
 exit 0
